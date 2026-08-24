@@ -1,0 +1,1 @@
+Trigger the repository bootstrap workflow after installing the verified source archive.
