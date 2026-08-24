@@ -1,0 +1,1 @@
+Reconstruct the SHA-256-verified source, run all procedural/static tests, and fast-forward the complete playable project to main.
