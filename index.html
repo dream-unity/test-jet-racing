@@ -1,1 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#050b18">
+  <meta name="description" content="Vector Apex is Dream Unity's high-speed 3D fighter-jet relational racing game. Infer spatial rules, commit to a corridor, and outfly the field.">
+  <meta name="color-scheme" content="dark">
+  <title>Vector Apex — Dream Unity Fighter-Jet Relational Racing</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles/main.css">
+</head>
+<body>
+  <main id="app" class="game-shell">
+    <canvas id="game-canvas" aria-label="Vector Apex three-dimensional fighter-jet race" tabindex="0"></canvas>
 
+    <section id="loading" class="boot-screen" aria-live="polite">
+      <div class="boot-mark" aria-hidden="true">VA</div>
+      <div class="boot-spinner" aria-hidden="true"></div>
+      <div class="boot-copy">
+        <strong>VECTOR APEX</strong>
+        <span>INITIALISING RELATIONAL FLIGHTSPACE</span>
+      </div>
+    </section>
+
+    <section id="main-menu" class="panel menu-panel" aria-label="Vector Apex main menu">
+      <div class="title-lockup">
+        <span class="eyebrow">DREAM UNITY // RELATIONAL GRAND PRIX</span>
+        <h1>VECTOR <span class="apex">APEX</span></h1>
+        <p class="menu-copy">Race a futuristic fighter-class jet through a continuous three-dimensional course where the correct inference becomes the fastest line.</p>
+      </div>
+
+      <div class="menu-grid">
+        <label class="field" for="mode-select">
+          <span>RACE MODE</span>
+          <select id="mode-select">
+            <option value="grand-prix" selected>Relational Grand Prix</option>
+            <option value="training">Adaptive Training</option>
+            <option value="transfer">Transfer Trial</option>
+            <option value="assessment">Seeded Assessment</option>
+            <option value="pure-flight">Pure Flight</option>
+          </select>
+        </label>
+
+        <label class="field" for="difficulty-select">
+          <span>RELATIONAL FRONTIER</span>
+          <select id="difficulty-select">
+            <option value="adaptive" selected>Adaptive</option>
+            <option value="rookie">Rookie</option>
+            <option value="pilot">Pilot</option>
+            <option value="ace">Ace</option>
+            <option value="apex">Apex</option>
+          </select>
+        </label>
+
+        <label class="field" for="graphics-quality">
+          <span>GRAPHICS</span>
+          <select id="graphics-quality">
+            <option value="auto" selected>Auto</option>
+            <option value="performance">Performance</option>
+            <option value="balanced">Balanced</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+
+        <label class="field toggle-field" for="flight-assist">
+          <span>STABILITY ASSIST</span>
+          <input id="flight-assist" type="checkbox" checked>
+          <span class="switch" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="control-brief" aria-label="Controls">
+        <div class="control-card">
+          <strong>DESKTOP</strong>
+          <span>WASD / arrows steer · Q/E roll · Shift boost · Space brake · Esc pause</span>
+        </div>
+        <div class="control-card">
+          <strong>TOUCH</strong>
+          <span>Multitouch flight stick · throttle rail · boost · brake · pause</span>
+        </div>
+        <div class="control-card">
+          <strong>DECISION</strong>
+          <span>Observe → infer → cross a corridor commitment plane → execute the gate</span>
+        </div>
+      </div>
+
+      <div id="menu-best" class="best-record" aria-live="polite">NO RECORDED GRAND PRIX YET</div>
+
+      <div class="menu-actions">
+        <button id="start-race" class="primary-button" type="button">LAUNCH RACE</button>
+        <button id="mute-toggle" class="secondary-button" type="button" aria-pressed="false">AUDIO: ON</button>
+      </div>
+    </section>
+
+    <section id="hud" class="hud" aria-label="Race information">
+      <div class="hud-top">
+        <div class="hud-card race-position">
+          <span class="hud-label">POSITION</span>
+          <strong id="position-readout" class="hud-value">1 / 6</strong>
+          <span id="lap-readout" class="hud-subvalue">LAP 1 / 3</span>
+        </div>
+
+        <div class="hud-card">
+          <span class="hud-label">RACE TIME</span>
+          <strong id="timer-readout" class="hud-value">00:00.000</strong>
+          <span id="split-readout" class="hud-subvalue">SPLIT --</span>
+        </div>
+
+        <div class="hud-card speed-meter">
+          <span class="hud-label">AIRSPEED</span>
+          <strong id="speed-readout" class="hud-value">0</strong>
+          <span class="hud-subvalue">KM/H</span>
+          <div class="meter-track" aria-label="Throttle">
+            <div id="throttle-bar" class="meter-fill throttle"></div>
+          </div>
+          <div class="meter-track" aria-label="Afterburner energy">
+            <div id="boost-bar" class="meter-fill boost"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cognitive-stack">
+        <div class="hud-card cognitive-card">
+          <span class="hud-label">RELATIONAL MODEL</span>
+          <div class="cognitive-grid">
+            <span>SKILL <strong id="skill-readout">1000</strong></span>
+            <span>ACCURACY <strong id="accuracy-readout">--</strong></span>
+            <span>FAMILY <strong id="family-readout">CALIBRATION</strong></span>
+            <span>DEPTH <strong id="depth-readout">0</strong></span>
+            <span>GATES <strong id="candidate-count">0</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="challenge-banner" class="challenge-banner" role="status" aria-live="polite">
+        <span id="challenge-phase" class="challenge-phase">OBSERVE</span>
+        <strong id="challenge-title" class="challenge-title">RELATIONAL SECTOR</strong>
+        <span id="challenge-instruction" class="challenge-instruction">Read the spatial demonstration, then fly your answer.</span>
+        <div id="memory-pips" class="memory-pips" aria-label="Working-memory rule stack"></div>
+      </div>
+
+      <div id="feedback" class="feedback-card" role="status" aria-live="polite">
+        <strong id="feedback-title" class="feedback-title">CORRECT</strong>
+        <span id="feedback-detail" class="feedback-detail">RELATION PRESERVED</span>
+        <span id="feedback-delta" class="feedback-delta">BOOST +20</span>
+      </div>
+
+      <div id="race-message" class="race-message" role="status" aria-live="assertive">
+        <h2 id="race-message-title">3</h2>
+        <p id="race-message-detail">LOCK TRAJECTORY</p>
+      </div>
+
+      <div class="minimap-wrap">
+        <canvas id="minimap" width="240" height="84" aria-label="Race progress minimap"></canvas>
+      </div>
+
+      <div class="hud-actions">
+        <button id="pause-btn" class="icon-button" type="button" aria-label="Pause race">Ⅱ</button>
+        <span id="frame-time" class="performance-readout" aria-label="Frame time">-- MS</span>
+      </div>
+    </section>
+
+    <section id="calibration-overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
+      <div class="overlay-card">
+        <span class="eyebrow">MOTOR BASELINE</span>
+        <h2 id="calibration-title">FLIGHT CALIBRATION</h2>
+        <p class="calibration-copy">Fly the neutral rings first. Steering precision and stability are recorded separately from relational performance.</p>
+        <div class="overlay-actions">
+          <button id="calibration-start" class="primary-button" type="button">BEGIN CALIBRATION</button>
+          <button id="calibration-skip" class="secondary-button" type="button">SKIP</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="pause-overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+      <div class="overlay-card">
+        <span class="eyebrow">RACE SUSPENDED</span>
+        <h2 id="pause-title">PAUSED</h2>
+        <div class="overlay-actions">
+          <button id="resume-race" class="primary-button" type="button">RESUME</button>
+          <button id="restart-race" class="secondary-button" type="button">RESTART</button>
+          <button id="return-menu" class="secondary-button" type="button">MAIN MENU</button>
+          <button id="pause-toggle" class="secondary-button" type="button">RESUME / PAUSE</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="results-overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="results-title">
+      <div class="overlay-card results-card">
+        <div class="results-header">
+          <div>
+            <span class="eyebrow">POST-RACE ANALYSIS</span>
+            <h2 id="results-title">VECTOR APEX REPORT</h2>
+          </div>
+          <div id="results-summary" class="results-position" aria-live="polite">--</div>
+        </div>
+        <div id="results-metrics" class="results-grid"></div>
+        <div>
+          <span class="hud-label">DIAGNOSTIC ERROR FAMILIES</span>
+          <div id="results-errors" class="error-list"></div>
+        </div>
+        <div class="overlay-actions">
+          <button id="results-again" class="primary-button" type="button">RACE AGAIN</button>
+          <button id="results-menu" class="secondary-button" type="button">MAIN MENU</button>
+          <button id="export-telemetry" class="secondary-button" type="button">EXPORT TELEMETRY</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="touch-controls" class="touch-controls" aria-label="Touch flight controls">
+      <div id="movement-pad" class="touch-stick" role="application" aria-label="Multitouch flight stick">
+        <div id="movement-knob" class="touch-knob"></div>
+      </div>
+      <div id="touch-throttle" class="touch-throttle" role="slider" aria-label="Throttle" aria-valuemin="0" aria-valuemax="100" aria-valuenow="75">
+        <div id="touch-throttle-fill" class="touch-throttle-fill"></div>
+      </div>
+      <button class="touch-button touch-boost" data-action="boost" type="button">BOOST</button>
+      <button class="touch-button touch-brake" data-action="brake" type="button">BRAKE</button>
+      <button class="touch-button touch-pause" id="touch-pause" type="button" aria-label="Pause race">Ⅱ</button>
+    </section>
+
+    <div id="live-region" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  </main>
+
+  <noscript>Vector Apex requires JavaScript and WebGL.</noscript>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
