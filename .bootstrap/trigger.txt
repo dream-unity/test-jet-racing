@@ -1,1 +1,2 @@
 Trigger the repository bootstrap workflow after installing the verified source archive.
+Activation merge nonce: 2026-08-24T20:00:00+10:00
