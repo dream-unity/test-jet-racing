@@ -1,0 +1,1 @@
+Run the SHA-256-selected bounded edge reconstruction and publish only the exact verified archive.
