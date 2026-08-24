@@ -1,0 +1,1 @@
+Recover the one inserted payload character by exact SHA-256, rerun all tests, and publish the complete source.
