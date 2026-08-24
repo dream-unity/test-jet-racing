@@ -1,0 +1,218 @@
+name: Deploy and verify Vector Apex Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout playable source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run complete project validation
+        run: npm test
+
+      - name: Validate static asset graph and Pages-safe paths
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const root = process.cwd();
+          const indexPath = path.join(root, 'index.html');
+          const html = fs.readFileSync(indexPath, 'utf8');
+          if (html.length < 500) throw new Error('index.html is unexpectedly small');
+
+          const rawRefs = [...html.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/gi)].map(match => match[1]);
+          const localRefs = rawRefs.filter(ref => !/^(?:[a-z]+:|\/\/|#|data:|mailto:)/i.test(ref));
+          const rootAbsolute = rawRefs.filter(ref => /^\/(?!\/)/.test(ref));
+          if (rootAbsolute.length) throw new Error(`Repository-subpath-unsafe references: ${rootAbsolute.join(', ')}`);
+
+          const resolveLocal = (fromFile, specifier) => {
+            const clean = specifier.split(/[?#]/, 1)[0];
+            if (!clean || /^(?:[a-z]+:|\/\/|#|data:)/i.test(clean)) return null;
+            if (clean.startsWith('/')) throw new Error(`Root-absolute module path: ${clean}`);
+            return path.resolve(path.dirname(fromFile), clean);
+          };
+
+          for (const ref of localRefs) {
+            const target = resolveLocal(indexPath, ref);
+            if (target && !fs.existsSync(target)) throw new Error(`Missing HTML asset: ${ref}`);
+          }
+
+          const entryScripts = [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)]
+            .map(match => resolveLocal(indexPath, match[1]))
+            .filter(Boolean);
+          if (!entryScripts.length) throw new Error('No executable script entry found in index.html');
+
+          const visited = new Set();
+          const queue = [...entryScripts];
+          const importPattern = /(?:import|export)\s+(?:[^"']*?\s+from\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
+          while (queue.length) {
+            const file = queue.shift();
+            if (visited.has(file)) continue;
+            visited.add(file);
+            if (!fs.existsSync(file)) throw new Error(`Missing JavaScript module: ${path.relative(root, file)}`);
+            const source = fs.readFileSync(file, 'utf8');
+            for (const match of source.matchAll(importPattern)) {
+              const specifier = match[1] || match[2];
+              const target = resolveLocal(file, specifier);
+              if (!target) continue;
+              const candidates = [target, `${target}.js`, path.join(target, 'index.js')];
+              const resolved = candidates.find(candidate => fs.existsSync(candidate));
+              if (!resolved) throw new Error(`Missing imported module '${specifier}' from ${path.relative(root, file)}`);
+              queue.push(resolved);
+            }
+          }
+
+          console.log(`Validated ${localRefs.length} HTML assets and ${visited.size} JavaScript modules.`);
+          NODE
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout validated source
+        uses: actions/checkout@v4
+
+      - name: Disable Jekyll processing
+        run: touch .nojekyll
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  live-smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout source for verification record
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Crawl live HTML and JavaScript dependency graph
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const rawPageUrl = process.env.PAGE_URL;
+          if (!rawPageUrl) throw new Error('Deployment did not return a Pages URL');
+          const pageUrl = new URL(rawPageUrl.endsWith('/') ? rawPageUrl : `${rawPageUrl}/`);
+
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          async function fetchText(url, attempts = 24) {
+            let lastError;
+            for (let attempt = 1; attempt <= attempts; attempt++) {
+              try {
+                const response = await fetch(url, { redirect: 'follow', cache: 'no-store' });
+                if (response.ok) return await response.text();
+                lastError = new Error(`${response.status} ${response.statusText}`);
+              } catch (error) {
+                lastError = error;
+              }
+              await sleep(Math.min(2500 * attempt, 10000));
+            }
+            throw new Error(`Unable to fetch ${url}: ${lastError}`);
+          }
+
+          const html = await fetchText(pageUrl);
+          if (html.length < 500) throw new Error('Live index.html is unexpectedly small');
+          const allRefs = [...html.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/gi)].map(match => match[1]);
+          const rootAbsolute = allRefs.filter(ref => /^\/(?!\/)/.test(ref));
+          if (rootAbsolute.length) throw new Error(`Live page contains subpath-breaking references: ${rootAbsolute.join(', ')}`);
+
+          const localUrl = (specifier, base) => {
+            if (!specifier || /^(?:#|data:|mailto:|javascript:)/i.test(specifier)) return null;
+            const url = new URL(specifier, base);
+            if (url.origin !== pageUrl.origin || !url.pathname.startsWith(pageUrl.pathname)) return null;
+            url.hash = '';
+            return url;
+          };
+
+          const fetchedAssets = new Set();
+          for (const ref of allRefs) {
+            const url = localUrl(ref, pageUrl);
+            if (!url || fetchedAssets.has(url.href)) continue;
+            await fetchText(url);
+            fetchedAssets.add(url.href);
+          }
+
+          const scriptUrls = [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)]
+            .map(match => localUrl(match[1], pageUrl))
+            .filter(Boolean);
+          if (!scriptUrls.length) throw new Error('Live page exposes no JavaScript entry script');
+
+          const visitedModules = new Set();
+          const queue = [...scriptUrls];
+          const importPattern = /(?:import|export)\s+(?:[^"']*?\s+from\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
+          while (queue.length) {
+            const url = queue.shift();
+            if (visitedModules.has(url.href)) continue;
+            const source = await fetchText(url);
+            visitedModules.add(url.href);
+            for (const match of source.matchAll(importPattern)) {
+              const child = localUrl(match[1] || match[2], url);
+              if (child && !visitedModules.has(child.href)) queue.push(child);
+            }
+          }
+
+          fs.mkdirSync('.deployment', { recursive: true });
+          fs.writeFileSync('.deployment/verified.json', JSON.stringify({
+            pageUrl: pageUrl.href,
+            sourceCommit: process.env.GITHUB_SHA,
+            verifiedAt: new Date().toISOString(),
+            htmlBytes: Buffer.byteLength(html),
+            assetsFetched: fetchedAssets.size,
+            modulesFetched: visitedModules.size
+          }, null, 2) + '\n');
+          console.log(`Live deployment verified: ${pageUrl.href}`);
+          console.log(`Fetched ${fetchedAssets.size} assets and ${visitedModules.size} JavaScript modules.`);
+          NODE
+
+      - name: Publish live-verification branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B pages-live-verified
+          git add .deployment/verified.json
+          git commit -m 'Record successful live GitHub Pages smoke test'
+          git push --force origin HEAD:refs/heads/pages-live-verified
