@@ -1,3 +1,3 @@
 Vector Apex verified source promotion trigger.
-Requested: 2026-08-24T08:09:05Z
-Path: exhaustive gzip/tar-manifest recovery and full npm validation.
+Requested: 2026-08-24T08:13:20Z
+Path: DEFLATE prefix diagnostic for exact transport repair.
