@@ -1,1 +1,3 @@
-Trigger the repository bootstrap workflow after installing the verified source archive.
+Vector Apex verified source promotion trigger.
+Requested: 2026-08-24T08:13:20Z
+Path: DEFLATE prefix diagnostic for exact transport repair.
