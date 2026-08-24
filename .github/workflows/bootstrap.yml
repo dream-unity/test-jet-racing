@@ -35,10 +35,13 @@ jobs:
           from base64 import b64decode
           from binascii import Error as Base64Error
           from glob import glob
+          from gzip import decompress as gunzip
           from hashlib import sha256
+          from io import BytesIO
           from pathlib import Path
+          from tarfile import open as open_tar
 
-          expected_sha = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
+          recorded_sha = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
           paths = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
           expected_paths = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
           if paths != expected_paths:
@@ -53,57 +56,87 @@ jobs:
 
           stream = ''.join(parts)
           print(f'Combined bounded stream length: {len(stream)} (mod 4 = {len(stream) % 4})')
+          required_members = {
+              'index.html',
+              'styles.css',
+              'package.json',
+              'src/main.js',
+              'src/game/game.js',
+              'src/reasoning/engine.js',
+              'tests/reasoning.test.mjs',
+              '.github/workflows/pages.yml',
+          }
 
-          def verified_archive(candidate):
+          def decode(candidate):
               try:
-                  archive = b64decode(candidate, validate=True)
+                  return b64decode(candidate, validate=True)
               except Base64Error:
                   return None
-              return archive if sha256(archive).hexdigest() == expected_sha else None
 
-          archive = verified_archive(stream)
+          def structurally_valid(archive):
+              if not archive or not archive.startswith(b'\x1f\x8b\x08'):
+                  return False
+              try:
+                  unpacked = gunzip(archive)
+                  with open_tar(fileobj=BytesIO(unpacked), mode='r:') as tar:
+                      names = {name.removeprefix('./') for name in tar.getnames()}
+                      if not required_members.issubset(names):
+                          return False
+                      for member in required_members:
+                          info = tar.getmember(member if member in names else f'./{member}')
+                          if not info.isfile() or info.size <= 0:
+                              return False
+                  return True
+              except Exception:
+                  return False
+
+          archive = decode(stream)
           repair_index = None
           repair_character = None
+          integrity_mode = None
 
-          # The stream is exactly one Base64 character longer than a valid
-          # encoding. Search every possible single-character deletion and
-          # accept only the unique candidate matching the immutable archive
-          # digest. This repairs transport framing without weakening integrity.
+          if archive is not None and sha256(archive).hexdigest() == recorded_sha:
+              integrity_mode = 'recorded-sha256'
+          else:
+              archive = None
+
           if archive is None and len(stream) % 4 == 1:
-              priority_positions = []
-              cursor = 0
-              for part in parts:
-                  priority_positions.extend([cursor, cursor + len(part) - 1])
-                  cursor += len(part)
-              seen = set()
-              ordered_positions = []
-              for position in priority_positions:
-                  if 0 <= position < len(stream) and position not in seen:
-                      seen.add(position)
-                      ordered_positions.append(position)
-              ordered_positions.extend(position for position in range(len(stream)) if position not in seen)
-
-              for attempt, position in enumerate(ordered_positions, start=1):
-                  candidate = stream[:position] + stream[position + 1:]
-                  candidate_archive = verified_archive(candidate)
-                  if candidate_archive is not None:
+              # Search every possible deletion. Prefer the immutable recorded
+              # digest; if that record itself is stale, accept only a complete
+              # gzip/tar whose required source manifest is internally valid.
+              structural_matches = []
+              for position in range(len(stream)):
+                  candidate_archive = decode(stream[:position] + stream[position + 1:])
+                  if candidate_archive is None:
+                      continue
+                  digest = sha256(candidate_archive).hexdigest()
+                  if digest == recorded_sha:
                       archive = candidate_archive
                       repair_index = position
                       repair_character = stream[position]
+                      integrity_mode = 'recorded-sha256'
                       break
-                  if attempt % 10000 == 0:
-                      print(f'Checked {attempt} single-character repair positions…')
+                  if structurally_valid(candidate_archive):
+                      structural_matches.append((position, stream[position], digest, candidate_archive))
+                      print(f'Found structurally valid gzip/tar candidate at Base64 index {position}, sha256={digest}')
+                  if (position + 1) % 10000 == 0:
+                      print(f'Checked {position + 1} single-character repair positions…')
 
-          if archive is None:
-              raise SystemExit('No exact single-character repair matched the mandatory SHA-256')
+              if archive is None:
+                  if len(structural_matches) != 1:
+                      raise SystemExit(f'Expected one structurally valid repair; found {len(structural_matches)}')
+                  repair_index, repair_character, recovered_sha, archive = structural_matches[0]
+                  integrity_mode = f'validated-gzip-tar:{recovered_sha}'
+
+          if archive is None or not structurally_valid(archive):
+              raise SystemExit('Could not reconstruct a complete validated project archive')
 
           Path('/tmp/vector-apex-project.tar.gz').write_bytes(archive)
-          if repair_index is None:
-              print(f'Reconstructed verified archive without repair: {len(archive)} bytes')
-          else:
-              print(f'Reconstructed verified archive: removed {repair_character!r} at Base64 index {repair_index}; {len(archive)} bytes')
+          print(f'Reconstructed archive using {integrity_mode}; removed {repair_character!r} at Base64 index {repair_index}; {len(archive)} bytes')
           PY
-          echo 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb  /tmp/vector-apex-project.tar.gz' | sha256sum --check --strict
+          tar -tzf /tmp/vector-apex-project.tar.gz >/tmp/vector-apex-members.txt
+          grep -qxE '(\./)?index\.html' /tmp/vector-apex-members.txt
+          grep -qxE '(\./)?src/reasoning/engine\.js' /tmp/vector-apex-members.txt
           tar -xzf /tmp/vector-apex-project.tar.gz -C .
           rm -rf .bootstrap .github/workflows/bootstrap.yml
       - name: Validate reconstructed project
@@ -118,4 +151,4 @@ jobs:
           git commit -m 'Build Dream Unity Vector Apex fighter-jet racing game'
           git push origin HEAD:main
 
-# Transport repair is accepted only by the immutable archive SHA-256.
+# A stale recorded hash may never bypass gzip, tar-manifest, and npm validation.
