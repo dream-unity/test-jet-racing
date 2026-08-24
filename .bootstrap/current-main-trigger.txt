@@ -1,0 +1,1 @@
+Validate and publish the unmodified source payload from current main.
