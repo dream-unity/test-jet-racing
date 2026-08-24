@@ -6,6 +6,11 @@ on:
     paths:
       - '.bootstrap/**'
       - '.github/workflows/bootstrap.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.bootstrap/**'
+      - '.github/workflows/bootstrap.yml'
   workflow_dispatch:
 
 permissions:
@@ -41,4 +46,4 @@ jobs:
           git commit -m 'Build Dream Unity Vector Apex fighter-jet racing game'
           git push origin HEAD:main
 
-# Re-triggered after interrupted deployment reconciliation on 2026-08-24.
+# Pull-request trigger added for inspectable deployment validation on 2026-08-24.
