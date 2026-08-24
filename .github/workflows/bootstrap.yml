@@ -34,21 +34,51 @@ jobs:
           python3 - <<'PY'
           from base64 import b64decode
           from glob import glob
+          from hashlib import sha256
+          from itertools import product
           from pathlib import Path
 
+          expected_sha = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
           parts = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
           expected_parts = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
           if parts != expected_parts:
               raise SystemExit(f'Unexpected payload set: {parts}')
 
-          decoded_parts = []
+          variant_sets = []
           for path in parts:
               encoded = Path(path).read_text(encoding='utf-8')
-              clean = ''.join(character for character in encoded if character.isalnum() or character in '+/=')
-              decoded_parts.append(b64decode(clean, validate=True))
-          archive = b''.join(decoded_parts)
+              clean = ''.join(character for character in encoded if character.isascii() and (character.isalnum() or character in '+/='))
+              variants = []
+              for label, value in [('drop-end', clean[:-1]), ('drop-start', clean[1:]), ('unaltered', clean)]:
+                  if value and value not in [existing for _, existing in variants]:
+                      variants.append((label, value))
+              variant_sets.append(variants)
+              print(f'{path}: raw={len(encoded)} bounded={len(clean)} prefix={clean[:8]!r} suffix={clean[-8:]!r}')
+
+          found = None
+          for chosen in product(*variant_sets):
+              labels = [label for label, _ in chosen]
+              texts = [value for _, value in chosen]
+              try:
+                  archive = b64decode(''.join(texts), validate=True)
+                  if sha256(archive).hexdigest() == expected_sha:
+                      found = (archive, labels, 'joined-stream')
+                      break
+              except Exception:
+                  pass
+              try:
+                  archive = b''.join(b64decode(value, validate=True) for value in texts)
+                  if sha256(archive).hexdigest() == expected_sha:
+                      found = (archive, labels, 'independent-chunks')
+                      break
+              except Exception:
+                  pass
+
+          if found is None:
+              raise SystemExit('No bounded edge-trim reconstruction matched the mandatory SHA-256')
+          archive, labels, mode = found
           Path('/tmp/vector-apex-project.tar.gz').write_bytes(archive)
-          print(f'Reconstructed {len(archive)} archive bytes from {len(parts)} independently padded chunks')
+          print(f'Reconstructed {len(archive)} bytes via {mode}: {labels}')
           PY
           echo 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb  /tmp/vector-apex-project.tar.gz' | sha256sum --check --strict
           tar -xzf /tmp/vector-apex-project.tar.gz -C .
