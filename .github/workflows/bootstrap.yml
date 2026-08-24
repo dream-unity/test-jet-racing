@@ -32,11 +32,14 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path, PurePosixPath
+          from io import BytesIO
           import base64
           import binascii
           import hashlib
           import shutil
+          import struct
           import tarfile
+          import zlib
 
           expected = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
           parts = sorted(Path('.bootstrap').glob('payload.[0-9][0-9]'))
@@ -46,26 +49,91 @@ jobs:
           print('payload lengths:', [len(chunk) for chunk in chunks])
           stream = ''.join(chunks)
 
-          def verified_decode(text):
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+
+          def decode(text):
               try:
-                  decoded = base64.b64decode(text.encode('ascii'), validate=True)
+                  return base64.b64decode(text.encode('ascii'), validate=True)
               except (binascii.Error, UnicodeEncodeError):
                   return None
-              return decoded if hashlib.sha256(decoded).hexdigest() == expected else None
+
+          def verified_decode(text):
+              decoded = decode(text)
+              return decoded if decoded is not None and digest(decoded) == expected else None
+
+          def gzip_header_length(data):
+              if len(data) < 18 or data[:3] != b'\x1f\x8b\x08':
+                  return None
+              flags = data[3]
+              if flags & 0xE0:
+                  return None
+              cursor = 10
+              if flags & 0x04:
+                  if cursor + 2 > len(data):
+                      return None
+                  xlen = struct.unpack_from('<H', data, cursor)[0]
+                  cursor += 2 + xlen
+              for flag in (0x08, 0x10):
+                  if flags & flag:
+                      terminator = data.find(b'\x00', cursor)
+                      if terminator < 0:
+                          return None
+                      cursor = terminator + 1
+              if flags & 0x02:
+                  cursor += 2
+              return cursor if cursor < len(data) - 8 else None
+
+          def repair_gzip_trailer(decoded):
+              header_length = gzip_header_length(decoded)
+              if header_length is None:
+                  return None, None
+              decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+              try:
+                  output = decompressor.decompress(decoded[header_length:])
+                  output += decompressor.flush()
+              except zlib.error:
+                  return None, None
+              if not decompressor.eof or len(decompressor.unused_data) < 8:
+                  return None, None
+              compressed_end = len(decoded) - len(decompressor.unused_data)
+              trailer = struct.pack('<II', zlib.crc32(output) & 0xFFFFFFFF, len(output) & 0xFFFFFFFF)
+              repaired = decoded[:compressed_end] + trailer
+              try:
+                  with tarfile.open(fileobj=BytesIO(repaired), mode='r:gz') as bundle:
+                      members = bundle.getmembers()
+              except (tarfile.TarError, OSError):
+                  return None, None
+              return repaired, (len(output), len(members))
 
           archive = verified_decode(stream)
           repair = 'none'
-          if archive is None:
-              first = chunks[0]
-              suffix = ''.join(chunks[1:])
-              for index in range(len(first)):
-                  archive = verified_decode(first[:index] + first[index + 1:] + suffix)
-                  if archive is not None:
-                      repair = f'deleted surplus payload.00 character at zero-based offset {index}'
-                      break
+          first = chunks[0]
+          suffix = ''.join(chunks[1:])
+          trailer_candidates = []
 
           if archive is None:
-              raise SystemExit('No single-character repair reproduced the expected SHA-256 archive')
+              for index in range(len(first)):
+                  candidate_text = first[:index] + first[index + 1:] + suffix
+                  decoded = decode(candidate_text)
+                  if decoded is None:
+                      continue
+                  if digest(decoded) == expected:
+                      archive = decoded
+                      repair = f'deleted surplus payload.00 character at zero-based offset {index}'
+                      break
+                  repaired, metadata = repair_gzip_trailer(decoded)
+                  if repaired is not None:
+                      candidate_hash = digest(repaired)
+                      trailer_candidates.append((index, candidate_hash, metadata))
+                      if candidate_hash == expected:
+                          archive = repaired
+                          repair = f'deleted payload.00 offset {index} and restored canonical gzip CRC/size trailer'
+                          break
+
+          if archive is None:
+              print('valid gzip/tar trailer-repair candidates:', trailer_candidates[:20])
+              raise SystemExit('No deterministic repair reproduced the expected SHA-256 archive')
 
           archive_path = Path('/tmp/vector-apex-project.tar.gz')
           destination = Path('/tmp/vector-apex-source')
@@ -91,7 +159,7 @@ jobs:
 
           print('archive recovered:', repair)
           print('archive bytes:', len(archive))
-          print('archive sha256:', hashlib.sha256(archive).hexdigest())
+          print('archive sha256:', digest(archive))
           print('safe members:', len(members))
           PY
 
