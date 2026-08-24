@@ -31,7 +31,20 @@ jobs:
       - name: Reconstruct source archive
         shell: bash
         run: |
-          cat .bootstrap/payload.* | base64 --decode > /tmp/vector-apex-project.tar.gz
+          python3 - <<'PY'
+          from base64 import b64decode
+          from glob import glob
+          from pathlib import Path
+
+          parts = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
+          if parts != [f'.bootstrap/payload.{index:02d}' for index in range(6)]:
+              raise SystemExit(f'Unexpected payload set: {parts}')
+          encoded = ''.join(Path(path).read_text(encoding='utf-8') for path in parts)
+          clean = ''.join(character for character in encoded if character.isalnum() or character in '+/=')
+          archive = b64decode(clean, validate=True)
+          Path('/tmp/vector-apex-project.tar.gz').write_bytes(archive)
+          print(f'Reconstructed {len(archive)} archive bytes from {len(parts)} bounded chunks')
+          PY
           echo 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb  /tmp/vector-apex-project.tar.gz' | sha256sum --check --strict
           tar -xzf /tmp/vector-apex-project.tar.gz -C .
           rm -rf .bootstrap .github/workflows/bootstrap.yml
