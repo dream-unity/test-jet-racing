@@ -1,0 +1,1 @@
+Retry source reconstruction using the bounded payload decoder and mandatory SHA-256 verification.

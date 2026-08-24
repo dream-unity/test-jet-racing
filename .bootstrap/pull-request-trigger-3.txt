@@ -1,0 +1,1 @@
+Decode each independently padded payload chunk, concatenate the verified binary slices, validate, and publish.
