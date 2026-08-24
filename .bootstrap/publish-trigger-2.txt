@@ -1,0 +1,1 @@
+Rerun verified source publication with deterministic GitHub Pages deployment files generated after extraction.
