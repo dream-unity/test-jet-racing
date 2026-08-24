@@ -1,0 +1,42 @@
+name: Bootstrap Vector Apex source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.bootstrap/**'
+      - '.github/workflows/bootstrap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vector-apex-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  unpack-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bootstrap commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reconstruct source archive
+        shell: bash
+        run: |
+          cat .bootstrap/payload.* | base64 --decode > /tmp/vector-apex-project.tar.gz
+          echo 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb  /tmp/vector-apex-project.tar.gz' | sha256sum --check --strict
+          tar -xzf /tmp/vector-apex-project.tar.gz -C .
+          rm -rf .bootstrap .github/workflows/bootstrap.yml
+      - name: Validate reconstructed project
+        run: npm test
+      - name: Commit complete playable source
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Build Dream Unity Vector Apex fighter-jet racing game'
+          git push origin HEAD:main
