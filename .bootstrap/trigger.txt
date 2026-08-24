@@ -1,3 +1,3 @@
 Vector Apex verified source promotion trigger.
-Requested: 2026-08-24T07:59:40Z
-Path: corrected independently decoded pull-request validation and deployment.
+Requested: 2026-08-24T08:02:25Z
+Path: SHA-256 bounded-edge reconstruction, validation, and deployment.
