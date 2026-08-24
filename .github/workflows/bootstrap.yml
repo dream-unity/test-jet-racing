@@ -1,7 +1,7 @@
-name: Publish verified Jet Relation source
+name: Install verified fighter-jet game source
 
 on:
-  pull_request:
+  push:
     branches: [main]
     paths:
       - '.bootstrap/**'
@@ -12,22 +12,22 @@ permissions:
   contents: write
 
 concurrency:
-  group: jet-relation-source-publish
+  group: install-verified-jet-game
   cancel-in-progress: false
 
 jobs:
   reconstruct-test-publish:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout the current merge candidate
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Reconstruct and verify the source archive
+      - name: Reconstruct and verify complete game source
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from base64 import b64decode
           from glob import glob
@@ -37,22 +37,29 @@ jobs:
           import tarfile
 
           EXPECTED_SHA = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
-          paths = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
-          expected_paths = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
-          if paths != expected_paths:
-              raise SystemExit(f'Unexpected payload set: {paths}')
+          payloads = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
+          expected = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
+          if payloads != expected:
+              raise SystemExit(f'Unexpected payload set: {payloads}')
 
-          chunks = []
-          for path in paths:
-              text = Path(path).read_text(encoding='utf-8')
-              clean = ''.join(character for character in text if character.isascii() and (character.isalnum() or character in '+/='))
-              chunks.append(clean)
-              print(f'{path}: {len(clean)} bounded base64 characters')
+          encoded_parts = []
+          for payload in payloads:
+              text = Path(payload).read_text(encoding='ascii')
+              clean = ''.join(text.split())
+              invalid = set(clean) - set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+              if invalid:
+                  raise SystemExit(f'Invalid base64 characters in {payload}: {sorted(invalid)!r}')
+              encoded_parts.append(clean)
+              print(f'{payload}: {len(clean)} base64 characters')
 
-          archive = b64decode(''.join(chunks), validate=True)
+          encoded = ''.join(encoded_parts)
+          if len(encoded) % 4:
+              raise SystemExit(f'Combined base64 length is not divisible by four: {len(encoded)}')
+
+          archive = b64decode(encoded, validate=True)
           digest = sha256(archive).hexdigest()
           if digest != EXPECTED_SHA:
-              raise SystemExit(f'Archive SHA-256 mismatch: {digest}')
+              raise SystemExit(f'Archive SHA-256 mismatch: expected {EXPECTED_SHA}, got {digest}')
           if not archive.startswith(b'\x1f\x8b\x08'):
               raise SystemExit('Verified archive is not gzip data')
 
@@ -74,87 +81,32 @@ jobs:
               bundle.extractall(destination, filter='data')
 
           required = ['index.html', 'package.json', 'js/main.js', 'tests/validate.mjs']
-          missing = [path for path in required if not (destination / path).is_file()]
+          missing = [name for name in required if not (destination / name).is_file()]
           if missing:
-              raise SystemExit(f'Archive omitted required project files: {missing}')
-          print(f'Archive SHA-256 verified; extracted {len(members)} safe members')
+              raise SystemExit(f'Archive omitted required files: {missing}')
+
+          print(f'Archive verified at {digest}; extracted {len(members)} safe members')
           PY
 
           rsync -a --delete --exclude='.git/' /tmp/jet-relation-source/ ./
+          touch .nojekyll
+          rm -rf .bootstrap .publish
+          rm -rf .github/workflows
 
-          python3 - <<'PY'
-          from pathlib import Path
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
-          pages = '''name: Validate and deploy Jet Relation
-
-          on:
-            push:
-              branches: [main]
-            workflow_dispatch:
-
-          permissions:
-            contents: read
-            pages: write
-            id-token: write
-
-          concurrency:
-            group: github-pages
-            cancel-in-progress: true
-
-          jobs:
-            validate:
-              runs-on: ubuntu-latest
-              steps:
-                - name: Check out game
-                  uses: actions/checkout@v4
-                - name: Set up Node
-                  uses: actions/setup-node@v4
-                  with:
-                    node-version: 22
-                - name: Validate procedural logic and static deployment
-                  run: npm test
-
-            deploy:
-              needs: validate
-              environment:
-                name: github-pages
-                url: ${{ steps.deployment.outputs.page_url }}
-              runs-on: ubuntu-latest
-              steps:
-                - name: Check out game
-                  uses: actions/checkout@v4
-                - name: Configure GitHub Pages
-                  uses: actions/configure-pages@v5
-                  with:
-                    enablement: true
-                - name: Upload static site
-                  uses: actions/upload-pages-artifact@v3
-                  with:
-                    path: .
-                - name: Deploy to GitHub Pages
-                  id: deployment
-                  uses: actions/deploy-pages@v4
-          '''
-          lines = pages.splitlines()
-          nonempty = [line for line in lines if line.strip()]
-          indent = min(len(line) - len(line.lstrip()) for line in nonempty)
-          normalized = '\n'.join(line[indent:] if line.strip() else '' for line in lines).lstrip() + '\n'
-          workflow = Path('.github/workflows/pages.yml')
-          workflow.parent.mkdir(parents=True, exist_ok=True)
-          workflow.write_text(normalized, encoding='utf-8')
-          Path('.nojekyll').touch()
-          PY
-
-          rm -rf .bootstrap .github/workflows/bootstrap.yml
-
-      - name: Validate procedural logic and static deployment
+      - name: Validate relational engine and static deployment
         run: npm test
 
-      - name: Commit the complete playable source to main
+      - name: Commit complete tested game directly to main
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'Build Dream Unity fighter-jet relational racing game'
+          git commit -m 'Deploy complete Dream Unity fighter-jet relational racing game'
           git push origin HEAD:main
