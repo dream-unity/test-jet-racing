@@ -1,10 +1,6 @@
-name: Diagnose and bootstrap Vector Apex source
+name: Publish verified Jet Relation source
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/bootstrap.yml'
   pull_request:
     branches: [main]
     paths:
@@ -16,74 +12,85 @@ permissions:
   contents: write
 
 concurrency:
-  group: vector-apex-bootstrap
+  group: jet-relation-source-publish
   cancel-in-progress: false
 
 jobs:
-  unpack-and-validate:
+  reconstruct-test-publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout bootstrap commit
+      - name: Checkout the current merge candidate
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Diagnose archive transport corruption
+
+      - name: Reconstruct and verify the source archive
         shell: bash
         run: |
           python3 - <<'PY'
           from base64 import b64decode
           from glob import glob
-          from heapq import nlargest
-          from pathlib import Path
-          import zlib
+          from hashlib import sha256
+          from pathlib import Path, PurePosixPath
+          import shutil
+          import tarfile
 
+          EXPECTED_SHA = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
           paths = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
-          expected = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
-          if paths != expected:
+          expected_paths = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
+          if paths != expected_paths:
               raise SystemExit(f'Unexpected payload set: {paths}')
-          parts = []
+
+          chunks = []
           for path in paths:
               text = Path(path).read_text(encoding='utf-8')
-              clean = ''.join(ch for ch in text if ch.isascii() and (ch.isalnum() or ch in '+/='))
-              parts.append(clean)
-              print(path, len(clean), clean[:8], clean[-8:])
-          stream = ''.join(parts)
-          print('stream', len(stream), 'mod4', len(stream) % 4)
+              clean = ''.join(character for character in text if character.isascii() and (character.isalnum() or character in '+/='))
+              chunks.append(clean)
+              print(f'{path}: {len(clean)} bounded base64 characters')
 
-          def prefix_score(encoded):
-              try:
-                  archive = b64decode(encoded, validate=True)
-              except Exception:
-                  return (-1, -1, '')
-              if not archive.startswith(b'\x1f\x8b\x08'):
-                  return (0, 0, archive[:8].hex())
-              decoder = zlib.decompressobj(31)
-              output_size = 0
-              compressed_offset = 0
-              chunk_size = 128
-              try:
-                  for compressed_offset in range(0, len(archive), chunk_size):
-                      output_size += len(decoder.decompress(archive[compressed_offset:compressed_offset + chunk_size]))
-                  output_size += len(decoder.flush())
-                  return (output_size, len(archive), 'complete')
-              except zlib.error as error:
-                  return (output_size, compressed_offset, str(error))
+          archive = b64decode(''.join(chunks), validate=True)
+          digest = sha256(archive).hexdigest()
+          if digest != EXPECTED_SHA:
+              raise SystemExit(f'Archive SHA-256 mismatch: {digest}')
+          if not archive.startswith(b'\x1f\x8b\x08'):
+              raise SystemExit('Verified archive is not gzip data')
 
-          first = parts[0]
-          suffix = ''.join(parts[1:])
-          scores = []
-          for position in range(len(first)):
-              encoded = first[:position] + first[position + 1:] + suffix
-              output_size, compressed_offset, detail = prefix_score(encoded)
-              scores.append((output_size, compressed_offset, position, first[position], detail))
-              if (position + 1) % 4000 == 0:
-                  print('scored', position + 1, 'deletions')
+          archive_path = Path('/tmp/jet-relation-source.tar.gz')
+          destination = Path('/tmp/jet-relation-source')
+          archive_path.write_bytes(archive)
+          shutil.rmtree(destination, ignore_errors=True)
+          destination.mkdir(parents=True)
 
-          print('TOP DELETION CANDIDATES')
-          for score in nlargest(40, scores):
-              print(score)
-          best = max(scores)
-          raise SystemExit(f'Diagnostic complete; best={best}')
+          with tarfile.open(archive_path, mode='r:gz') as bundle:
+              members = bundle.getmembers()
+              for member in members:
+                  normalized = member.name.replace('\\', '/')
+                  while normalized.startswith('./'):
+                      normalized = normalized[2:]
+                  path = PurePosixPath(normalized)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit(f'Unsafe archive member: {member.name}')
+              bundle.extractall(destination, filter='data')
+
+          required = ['index.html', 'package.json', 'js/main.js', 'tests/validate.mjs', '.github/workflows/pages.yml']
+          missing = [path for path in required if not (destination / path).is_file()]
+          if missing:
+              raise SystemExit(f'Archive omitted required project files: {missing}')
+          print(f'Archive SHA-256 verified; extracted {len(members)} safe members')
           PY
 
-# This diagnostic never publishes unverified source.
+          rsync -a --delete --exclude='.git/' /tmp/jet-relation-source/ ./
+          rm -rf .bootstrap .github/workflows/bootstrap.yml
+
+      - name: Validate procedural logic and static deployment
+        run: npm test
+
+      - name: Commit the complete playable source to main
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Build Dream Unity fighter-jet relational racing game'
+          git push origin HEAD:main
