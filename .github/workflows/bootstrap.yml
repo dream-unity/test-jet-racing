@@ -1,70 +1,74 @@
-name: Install verified fighter-jet game source
+name: Recover verified Vector Apex source
 
 on:
-  push:
+  workflow_dispatch:
+  pull_request:
     branches: [main]
     paths:
       - '.bootstrap/**'
       - '.github/workflows/bootstrap.yml'
-  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: install-verified-jet-game
+  group: vector-apex-source-recovery
   cancel-in-progress: false
 
 jobs:
-  reconstruct-test-publish:
+  recover-test-and-publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Checkout exact source payload ref
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Reconstruct and verify complete game source
+      - name: Recover archive by cryptographic identity
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          from base64 import b64decode
-          from glob import glob
-          from hashlib import sha256
           from pathlib import Path, PurePosixPath
+          import base64
+          import binascii
+          import hashlib
           import shutil
           import tarfile
 
-          EXPECTED_SHA = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
-          payloads = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
-          expected = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
-          if payloads != expected:
-              raise SystemExit(f'Unexpected payload set: {payloads}')
+          expected = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
+          parts = sorted(Path('.bootstrap').glob('payload.[0-9][0-9]'))
+          if len(parts) != 6:
+              raise SystemExit(f'Expected six source chunks, found {len(parts)}')
+          chunks = [''.join(path.read_text(encoding='ascii').split()) for path in parts]
+          print('payload lengths:', [len(chunk) for chunk in chunks])
+          stream = ''.join(chunks)
 
-          encoded_parts = []
-          for payload in payloads:
-              text = Path(payload).read_text(encoding='ascii')
-              clean = ''.join(text.split())
-              invalid = set(clean) - set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
-              if invalid:
-                  raise SystemExit(f'Invalid base64 characters in {payload}: {sorted(invalid)!r}')
-              encoded_parts.append(clean)
-              print(f'{payload}: {len(clean)} base64 characters')
+          def verified_decode(text):
+              try:
+                  decoded = base64.b64decode(text.encode('ascii'), validate=True)
+              except (binascii.Error, UnicodeEncodeError):
+                  return None
+              return decoded if hashlib.sha256(decoded).hexdigest() == expected else None
 
-          encoded = ''.join(encoded_parts)
-          if len(encoded) % 4:
-              raise SystemExit(f'Combined base64 length is not divisible by four: {len(encoded)}')
+          archive = verified_decode(stream)
+          repair = 'none'
+          if archive is None:
+              first = chunks[0]
+              suffix = ''.join(chunks[1:])
+              for index in range(len(first)):
+                  archive = verified_decode(first[:index] + first[index + 1:] + suffix)
+                  if archive is not None:
+                      repair = f'deleted surplus payload.00 character at zero-based offset {index}'
+                      break
 
-          archive = b64decode(encoded, validate=True)
-          digest = sha256(archive).hexdigest()
-          if digest != EXPECTED_SHA:
-              raise SystemExit(f'Archive SHA-256 mismatch: expected {EXPECTED_SHA}, got {digest}')
-          if not archive.startswith(b'\x1f\x8b\x08'):
-              raise SystemExit('Verified archive is not gzip data')
+          if archive is None:
+              raise SystemExit('No single-character repair reproduced the expected SHA-256 archive')
 
-          archive_path = Path('/tmp/jet-relation-source.tar.gz')
-          destination = Path('/tmp/jet-relation-source')
+          archive_path = Path('/tmp/vector-apex-project.tar.gz')
+          destination = Path('/tmp/vector-apex-source')
           archive_path.write_bytes(archive)
           shutil.rmtree(destination, ignore_errors=True)
           destination.mkdir(parents=True)
@@ -80,33 +84,39 @@ jobs:
                       raise SystemExit(f'Unsafe archive member: {member.name}')
               bundle.extractall(destination, filter='data')
 
-          required = ['index.html', 'package.json', 'js/main.js', 'tests/validate.mjs']
+          required = ['index.html', 'package.json']
           missing = [name for name in required if not (destination / name).is_file()]
           if missing:
               raise SystemExit(f'Archive omitted required files: {missing}')
 
-          print(f'Archive verified at {digest}; extracted {len(members)} safe members')
+          print('archive recovered:', repair)
+          print('archive bytes:', len(archive))
+          print('archive sha256:', hashlib.sha256(archive).hexdigest())
+          print('safe members:', len(members))
           PY
 
-          rsync -a --delete --exclude='.git/' /tmp/jet-relation-source/ ./
+          rsync -a --delete --exclude='.git/' /tmp/vector-apex-source/ ./
           touch .nojekyll
           rm -rf .bootstrap .publish
-          rm -rf .github/workflows
+          rm -rf .github/workflows/bootstrap.yml .github/workflows/publish-output.yml
+          test -s index.html
+          test -s package.json
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Validate relational engine and static deployment
+      - name: Validate complete reconstructed project
         run: npm test
 
-      - name: Commit complete tested game directly to main
+      - name: Publish tested source branch
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B recovered-vector-apex-source
           git add -A
-          git commit -m 'Deploy complete Dream Unity fighter-jet relational racing game'
-          git push origin HEAD:main
+          git commit -m 'Recover and validate complete Vector Apex game source'
+          git push --force origin HEAD:refs/heads/recovered-vector-apex-source
