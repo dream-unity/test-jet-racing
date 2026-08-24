@@ -37,13 +37,18 @@ jobs:
           from pathlib import Path
 
           parts = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
-          if parts != [f'.bootstrap/payload.{index:02d}' for index in range(6)]:
+          expected_parts = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
+          if parts != expected_parts:
               raise SystemExit(f'Unexpected payload set: {parts}')
-          encoded = ''.join(Path(path).read_text(encoding='utf-8') for path in parts)
-          clean = ''.join(character for character in encoded if character.isalnum() or character in '+/=')
-          archive = b64decode(clean, validate=True)
+
+          decoded_parts = []
+          for path in parts:
+              encoded = Path(path).read_text(encoding='utf-8')
+              clean = ''.join(character for character in encoded if character.isalnum() or character in '+/=')
+              decoded_parts.append(b64decode(clean, validate=True))
+          archive = b''.join(decoded_parts)
           Path('/tmp/vector-apex-project.tar.gz').write_bytes(archive)
-          print(f'Reconstructed {len(archive)} archive bytes from {len(parts)} bounded chunks')
+          print(f'Reconstructed {len(archive)} archive bytes from {len(parts)} independently padded chunks')
           PY
           echo 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb  /tmp/vector-apex-project.tar.gz' | sha256sum --check --strict
           tar -xzf /tmp/vector-apex-project.tar.gz -C .
