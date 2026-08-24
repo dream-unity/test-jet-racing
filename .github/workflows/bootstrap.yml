@@ -33,52 +33,75 @@ jobs:
         run: |
           python3 - <<'PY'
           from base64 import b64decode
+          from binascii import Error as Base64Error
           from glob import glob
           from hashlib import sha256
-          from itertools import product
           from pathlib import Path
 
           expected_sha = 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb'
-          parts = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
-          expected_parts = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
-          if parts != expected_parts:
-              raise SystemExit(f'Unexpected payload set: {parts}')
+          paths = sorted(glob('.bootstrap/payload.[0-9][0-9]'))
+          expected_paths = [f'.bootstrap/payload.{index:02d}' for index in range(6)]
+          if paths != expected_paths:
+              raise SystemExit(f'Unexpected payload set: {paths}')
 
-          variant_sets = []
-          for path in parts:
+          parts = []
+          for path in paths:
               encoded = Path(path).read_text(encoding='utf-8')
               clean = ''.join(character for character in encoded if character.isascii() and (character.isalnum() or character in '+/='))
-              variants = []
-              for label, value in [('drop-end', clean[:-1]), ('drop-start', clean[1:]), ('unaltered', clean)]:
-                  if value and value not in [existing for _, existing in variants]:
-                      variants.append((label, value))
-              variant_sets.append(variants)
+              parts.append(clean)
               print(f'{path}: raw={len(encoded)} bounded={len(clean)} prefix={clean[:8]!r} suffix={clean[-8:]!r}')
 
-          found = None
-          for chosen in product(*variant_sets):
-              labels = [label for label, _ in chosen]
-              texts = [value for _, value in chosen]
-              try:
-                  archive = b64decode(''.join(texts), validate=True)
-                  if sha256(archive).hexdigest() == expected_sha:
-                      found = (archive, labels, 'joined-stream')
-                      break
-              except Exception:
-                  pass
-              try:
-                  archive = b''.join(b64decode(value, validate=True) for value in texts)
-                  if sha256(archive).hexdigest() == expected_sha:
-                      found = (archive, labels, 'independent-chunks')
-                      break
-              except Exception:
-                  pass
+          stream = ''.join(parts)
+          print(f'Combined bounded stream length: {len(stream)} (mod 4 = {len(stream) % 4})')
 
-          if found is None:
-              raise SystemExit('No bounded edge-trim reconstruction matched the mandatory SHA-256')
-          archive, labels, mode = found
+          def verified_archive(candidate):
+              try:
+                  archive = b64decode(candidate, validate=True)
+              except Base64Error:
+                  return None
+              return archive if sha256(archive).hexdigest() == expected_sha else None
+
+          archive = verified_archive(stream)
+          repair_index = None
+          repair_character = None
+
+          # The stream is exactly one Base64 character longer than a valid
+          # encoding. Search every possible single-character deletion and
+          # accept only the unique candidate matching the immutable archive
+          # digest. This repairs transport framing without weakening integrity.
+          if archive is None and len(stream) % 4 == 1:
+              priority_positions = []
+              cursor = 0
+              for part in parts:
+                  priority_positions.extend([cursor, cursor + len(part) - 1])
+                  cursor += len(part)
+              seen = set()
+              ordered_positions = []
+              for position in priority_positions:
+                  if 0 <= position < len(stream) and position not in seen:
+                      seen.add(position)
+                      ordered_positions.append(position)
+              ordered_positions.extend(position for position in range(len(stream)) if position not in seen)
+
+              for attempt, position in enumerate(ordered_positions, start=1):
+                  candidate = stream[:position] + stream[position + 1:]
+                  candidate_archive = verified_archive(candidate)
+                  if candidate_archive is not None:
+                      archive = candidate_archive
+                      repair_index = position
+                      repair_character = stream[position]
+                      break
+                  if attempt % 10000 == 0:
+                      print(f'Checked {attempt} single-character repair positions…')
+
+          if archive is None:
+              raise SystemExit('No exact single-character repair matched the mandatory SHA-256')
+
           Path('/tmp/vector-apex-project.tar.gz').write_bytes(archive)
-          print(f'Reconstructed {len(archive)} bytes via {mode}: {labels}')
+          if repair_index is None:
+              print(f'Reconstructed verified archive without repair: {len(archive)} bytes')
+          else:
+              print(f'Reconstructed verified archive: removed {repair_character!r} at Base64 index {repair_index}; {len(archive)} bytes')
           PY
           echo 'c7aa0fafce73792a524fe88293e85a21946b82bb0dc9564484fb8677fd8917fb  /tmp/vector-apex-project.tar.gz' | sha256sum --check --strict
           tar -xzf /tmp/vector-apex-project.tar.gz -C .
@@ -86,6 +109,7 @@ jobs:
       - name: Validate reconstructed project
         run: npm test
       - name: Commit complete playable source
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
@@ -94,4 +118,4 @@ jobs:
           git commit -m 'Build Dream Unity Vector Apex fighter-jet racing game'
           git push origin HEAD:main
 
-# Pull-request trigger added for inspectable deployment validation on 2026-08-24.
+# Transport repair is accepted only by the immutable archive SHA-256.
